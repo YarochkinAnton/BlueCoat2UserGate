@@ -3,23 +3,8 @@ import re
 import sys
 import parsec as p
 import parsers
-
-
-class ProxyGroup:
-    # Here _condition could be ('name', '<NAME OF THE CONDITION GROUP>' or ('expression', '<CONDITION EXPRESSION>')
-    def __init__(self, _line_number, _name, _rules, _condition=None):
-        self.line_number = _line_number
-        self.name = _name
-        self.rules = _rules
-        self.condition = _condition
-
-    def __str__(self):
-        nl = '\n\t'
-        rules = nl.join(map(str, self.rules))
-        return f'{self.line_number} Proxy rule group {self.name} {" with condition named " + self.condition if self.condition else ""}{nl}{rules}'
-
-    def add_rule(self, _line_number, rule):
-        self.rules.append(rule)
+import bluecoat
+import filters
 
 
 def parse_proxy_group_header(_line_number, line):
@@ -28,17 +13,6 @@ def parse_proxy_group_header(_line_number, line):
     return dict((('line_number', _line_number), *parse_result))
 
 
-class Rule:
-    def __init__(self, _line_number, _type, _parameters, _condition=None):
-        self.line_number = _line_number
-        self.type = _type
-        self.parameters = _parameters
-        self.condition = _condition
-
-    def __str__(self):
-        parameters = ', '.join(
-            map(lambda x: f'{x[0]} = {x[1]}', self.parameters))
-        return f'{self.line_number} Proxy rule {"condition = " + self.condition if self.condition else ""}{parameters}'
 
 
 def parse_rule(_line_number, _line):
@@ -46,25 +20,8 @@ def parse_rule(_line_number, _line):
     return dict(parsed_rule)
 
 
-class ConditionGroupUnparsed:
-    def __init__(self, _line_number, _name, _parts, _condition=None):
-        self.line_number = _line_number
-        self.name = _name
-        self.parts = _parts
-        self.condition = _condition
 
 
-class ConditionUnparsed:
-    def __init__(self, _line_number, _parameters, _condition=None):
-        self.line_number = _line_number
-        self.parameters = _parameters
-        self.condition = _condition
-
-
-class ParserState(enum.Enum):
-    Init = enum.auto()
-    ProxyGroup = enum.auto()
-    ConditionGroup = enum.auto()
 
 
 class LineType(enum.Enum):
@@ -117,14 +74,6 @@ def value_parser():
     return p.regex(r'([\w\.\-\\/\(\)]+|"[\w\.\-\\/\s\(\)]+")')
 
 
-def key_value_parser():
-    list_value = ip_parser() ^ hostname_parser() ^ word_parser()
-    list_separator = p.regex('\s*,\s*')
-    values = generic_list_parser(
-        list_value, list_separator) ^ list_value ^ ip_range_parser() ^ permission_parser()
-    return key_name_parser() + (p.one_of('=') >> values)
-
-
 def rule_parser():
     parameters = [
         p.desc(parsers.condition_parser(), 'Condition parser failed'),
@@ -137,10 +86,6 @@ def rule_parser():
         parsers.url_address_parameter_parser(),
         parsers.proxy_port_parameter_parser(),
         parsers.setting_parser(),
-    ]
-    parameters2 = [
-        parsers.setting_parser(),
-        parsers.proxy_port_parameter_parser()
     ]
     parameters_parser = p.parsecmap(p.sepBy1(
         parsers.try_parser(parameters), p.many1(p.spaces())), lambda x: ('parameters', x))
@@ -165,45 +110,63 @@ def clear_comments(line):
     pos = line.rfind(';')
     return line[:pos]
 
+def extract_comment(line):
+    pos = line.rfind(';')
+    if pos == -1:
+        return (line, "")
+    else:
+        return (line[:pos], filter_newline(line[pos + 1:]))
+
+def filter_newline(line):
+    return line[:-1]
 
 if __name__ == '__main__':
     filename = sys.argv[1]
+    
+    # server or user
+    # For different aggregation naming logic
+    rule_category = sys.argv[2]
 
     input_file = open(filename, encoding='utf-8')
 
     fw_objects = []
 
-    parser_state = ParserState.Init
+    parser_state = parsers.ParserState.Init
 
     for (number, line) in enumerate(input_file.readlines(), start=1):
-        line = clear_comments(line)
-        type_of_line = line_type(line)
+        try:
+            (line, comment) = extract_comment(line)
+            type_of_line = line_type(line)
 
-        if type_of_line == LineType.Comment:
-            continue
-        elif type_of_line == LineType.Empty:
-            continue
-        elif type_of_line == LineType.ProxyHeader:
-            parsed_header = parse_proxy_group_header(number, line)
-            fw_objects.append(ProxyGroup(
-                number, parsed_header['name'], [], parsed_header.get('condition')))
-            parser_state = ParserState.ProxyGroup
-            continue
-        elif type_of_line == LineType.ConditionHeader:
-            parser_state = ParserState.Init
-            continue
-        elif type_of_line == LineType.IDGAF:
-            if parser_state == ParserState.ProxyGroup:
-                parsed_rule = None
-                try:
+            if type_of_line == LineType.Comment:
+                continue
+            elif type_of_line == LineType.Empty:
+                continue
+            elif type_of_line == LineType.ProxyHeader:
+                parsed_header = parse_proxy_group_header(number, line)
+                fw_objects.append(bluecoat.ProxyGroup(
+                    number, parsed_header['name'], [], parsed_header.get('condition')))
+                parser_state = parsers.ParserState.ProxyGroup
+                continue
+            elif type_of_line == LineType.ConditionHeader:
+                parser_state = parsers.ParserState.Init
+                continue
+            elif type_of_line == LineType.IDGAF:
+                if parser_state == parsers.ParserState.ProxyGroup:
+                    parsed_rule = None
                     parsed_rule = parse_rule(number, line)
-                except:
-                    print("Stopped at", number)
-                    exit(1)
-                rule = Rule(number, parsed_rule['type'], parsed_rule['parameters'] if parsed_rule.get(
-                    'parameters') else [], parsed_rule.get('condition'))
-                # print(rule)
-                fw_objects[-1].add_rule(number, rule)
+                    rule = bluecoat.Rule(number, parsed_rule['type'], parsed_rule['parameters'] if parsed_rule.get(
+                        'parameters') else [], comment, parsed_rule.get('condition'))
+                    # print(rule)
+                    fw_objects[-1].add_rule(number, rule)
+        except:
+            print("Stopped at", number)
+            exit(1)
+
+    
+    (fw_objects, filtered_out_lines) = filters.filter_rules(fw_objects, rule_category)
 
     for fw_obj in fw_objects:
         print(fw_obj)
+
+    print("Filtered out", filtered_out_lines)

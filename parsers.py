@@ -1,6 +1,11 @@
-from tkinter.ttk import Separator
+from struct import unpack
 import parsec as p
+import enum
 
+class ParserState(enum.Enum):
+    Init = enum.auto()
+    ProxyGroup = enum.auto()
+    ConditionGroup = enum.auto()
 
 def generic_list_parser(_value_parser, _separator_parser):
     # Lists in BlueCoat enclosed in brackets
@@ -11,9 +16,11 @@ def generic_list_parser(_value_parser, _separator_parser):
     return result
 
 
+# Return list anyways
 def maybe_list_parser(_value_parser):
     separator = p.spaces() + p.string(',') + p.spaces()
-    result = (generic_list_parser(_value_parser, separator) ^ _value_parser)
+    unmapped_result = (generic_list_parser(_value_parser, separator) ^ _value_parser)
+    result = p.parsecmap(unmapped_result, lambda x: x if isinstance(x, list) else [x])
     return result
 
 
@@ -50,11 +57,16 @@ def date_range_parser():
     # Date ranges look like this
     # yyyymmdd..yyyymmdd
     result = p.regex(r'\d\d\d\d\d\d\d\d\.\.\d\d\d\d\d\d\d\d')
+
+    #                   y y y y m m d d                                   y y y y m m d d
+    unmapped_result = p.regex(r'\d\d\d\d\d\d\d\d') + (p.string('..') >> p.regex(r'\d\d\d\d\d\d\d\d'))
+    result = p.parsecmap(unmapped_result, lambda x: (int(x[0]), int(x[1])))
     return result
 
 
 def date_parameter_parser():
     result = generic_parameter_parser(p.string('date'), date_range_parser())
+    result = p.string('date') + (p.string('=') >> date_range_parser())
     return result
 
 
@@ -103,7 +115,7 @@ def username_parser():
 
 
 def port_parser():
-    result = p.many1(p.digit())
+    result = p.regex(r'\d+')
     return result
 
 
