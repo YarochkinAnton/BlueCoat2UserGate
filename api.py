@@ -16,6 +16,7 @@ class Client:
         self.url = _url
         self.username = _username
         self.password = _password
+        self.auth_token = None
 
     def auth(self):
         payload = f'''
@@ -37,17 +38,18 @@ class Client:
         xml_tree = ElementTree.fromstring(response.content)
         auth_token = xml_tree.findtext(
             './params[1]/param/value/struct/member[name="auth_token"]/value/string')
-        return auth_token
+        self.auth_token = auth_token
 
-    def get_zones(self):
-        auth_token = self.auth()
+    def get_zones(self, authenticate=False):
+        if authenticate:
+            self.auth()
         data = f'''
         <?xml version="1.0"?>
         <methodCall>
             <methodName>v1.netmanager.zones.list</methodName>
             <params>
                 <param>
-                    <value><string>{auth_token}</string></value>
+                    <value><string>{self.auth_token}</string></value>
                 </param>
             </params>
         </methodCall>
@@ -65,11 +67,13 @@ class Client:
                 members[name] = value
             zones.append(members)
             members['id'] = int(members['id'])
-                
+
         return zones
 
     # _type => string -> "url", "network"
-    def get_named_lists(self, _type):
+    def get_named_lists(self, _type, authenticate=False):
+        if authenticate:
+            self.auth()
         auth_token = self.auth()
         data = f'''
         <?xml version="1.0"?>
@@ -77,7 +81,7 @@ class Client:
             <methodName>v2.nlists.list</methodName>
             <params>
                 <param>
-                    <value><string>{auth_token}</string></value>
+                    <value><string>{self.auth_token}</string></value>
                 </param>
                 <param>
                     <value><string>{_type}</string></value>
@@ -86,7 +90,7 @@ class Client:
                     <value><int>1</int></value>
                 </param>
                 <param>
-                    <value><int>100</int></value>
+                    <value><int>10000</int></value>
                 </param>
                 <param>
                     <value></value>
@@ -97,20 +101,32 @@ class Client:
         data = inspect.cleandoc(data)
         response = requests.post(self.url, data, headers)
         xml_tree = ElementTree.fromstring(response.content)
-        xml_list_items = xml_tree.findall('./params/param/value/struct/member[name="items"]./value/array/data/value')
+        xml_list_items = xml_tree.findall(
+            './params/param/value/struct/member[name="items"]./value/array/data/value')
         lists = []
         for xml_list_item in xml_list_items:
             members = {}
             for xml_member in xml_list_item.findall('./struct/member'):
                 name = xml_member.findtext('./name')
                 value = xml_member.findtext('./value/*')
-                members[name] = value
+                if name == 'id':
+                    members[name] = int(value)
+                else:
+                    members[name] = value
+            xml_attributes = xml_list_item.findall(
+                './struct/member[name="attributes"]./value/array/data/value')
+            for xml_attribute in xml_attributes:
+                name = xml_attribute.findtext('./struct/member/name')
+                value = xml_attribute.findtext('./struct/member/value/*')
+                members['attributes'][name] = value
             lists.append(members)
 
         return lists
-        
+
     # _id => string -> list ID
-    def get_list_info(self, _id):
+    def get_list_info(self, _id, authenticate=False):
+        if authenticate:
+            self.auth()
         auth_token = self.auth()
         data = f'''
         <?xml version="1.0"?>
@@ -118,7 +134,7 @@ class Client:
             <methodName>v2.nlists.list.list</methodName>
             <params>
                 <param>
-                    <value><string>{auth_token}</string></value>
+                    <value><string>{self.auth_token}</string></value>
                 </param>
                 <param>
                     <value><int>{_id}</int></value>
@@ -141,7 +157,8 @@ class Client:
         data = inspect.cleandoc(data)
         response = requests.post(self.url, data, headers)
         xml_tree = ElementTree.fromstring(response.content)
-        xml_items = xml_tree.findall('.params/param/value/struct/member[name="items"]/./value/array/data/value')
+        xml_items = xml_tree.findall(
+            '.params/param/value/struct/member[name="items"]/./value/array/data/value')
         result = []
         for xml_item in xml_items:
             members = {}
@@ -153,9 +170,9 @@ class Client:
 
         return result
 
-
-    def add_list_item(self, _id, _item):
-        auth_token = self.auth()
+    def add_list_item(self, _id, _item, authenticate=False):
+        if authenticate:
+            self.auth()
         item_id = randint(1, 10000)
         data = f'''
         <?xml version="1.0"?>
@@ -163,7 +180,7 @@ class Client:
             <methodName>v2.nlists.list.add</methodName>
             <params>
                 <param>
-                    <value><string>{auth_token}</string></value>
+                    <value><string>{self.auth_token}</string></value>
                 </param>
                 <param>
                     <value><int>{_id}</int></value>
@@ -190,18 +207,18 @@ class Client:
         return response.content
 
     # Return UID of newly created list
-    def create_list(self, _name, _description, _type):
-        auth_token = self.auth()
+    def create_list(self, _name, _description, _type, authenticate=False):
+        if authenticate:
+            self.auth()
         list_id = randint(1, 10000)
         list_guid = str(uuid.uuid4())
-        print(list_guid)
         data = f'''
         <?xml version="1.0"?>
         <methodCall>
             <methodName>v2.nlists.add</methodName>
             <params>
                 <param>
-                    <value><string>{auth_token}</string></value>
+                    <value><string>{self.auth_token}</string></value>
                 </param>
                 <param>
                     <value>
@@ -233,18 +250,12 @@ class Client:
                             <member>
                                 <name>attributes</name>
                                 <value>
-                                    <array>
-                                        <data>
-                                            <value>
-                                                <struct>
-                                                    <member>
-                                                        <name>threat_level</name>
-                                                        <value><int>1</int></value>
-                                                    </member>
-                                                </struct>
-                                            </value>
-                                        </data>
-                                    </array>
+                                    <struct>
+                                        <member>
+                                            <name>threat_level</name>
+                                            <value><int>1</int></value>
+                                        </member>
+                                    </struct>
                                 </value>
                             </member>
                         </struct>
@@ -255,20 +266,20 @@ class Client:
         '''
         data = inspect.cleandoc(data)
         response = requests.post(self.url, data, headers)
-        print(response.content)
         xml_tree = ElementTree.fromstring(response.content)
         uid = xml_tree.findtext('./params/param/value/int')
         return int(uid)
 
-    def list_ldap_servers(self):
-        auth_token = self.auth()
+    def list_ldap_servers(self, authenticate=False):
+        if authenticate:
+            self.auth()
         data = f'''
         <?xml version="1.0"?>
         <methodCall>
             <methodName>v1.auth.ldap.servers.list</methodName>
             <params>
                 <param>
-                    <value><string>{auth_token}</string></value>
+                    <value><string>{self.auth_token}</string></value>
                 </param>
                 <param>
                     <value>
@@ -286,7 +297,8 @@ class Client:
         data = inspect.cleandoc(data)
         response = requests.post(self.url, data, headers)
         xml_tree = ElementTree.fromstring(response.content)
-        xml_ldap_servers = xml_tree.findall('./params/param/value/array/data/value')
+        xml_ldap_servers = xml_tree.findall(
+            './params/param/value/array/data/value')
         servers = []
         for xml_ldap_server in xml_ldap_servers:
             members = {
@@ -297,17 +309,18 @@ class Client:
 
         return servers
 
-        
-    def list_ldap_users(self, _server_name, _pattern="*"):
-        ldap_server_id = next(filter(lambda x: x['name'] == _server_name, self.list_ldap_servers()))['id']
-        auth_token = self.auth()
+    def get_user(self, _server_name, _pattern="*", authenticate=False):
+        if authenticate:
+            self.auth()
+        ldap_server_id = next(
+            filter(lambda x: x['name'] == _server_name, self.list_ldap_servers()))['id']
         data = f'''
         <?xml version="1.0"?>
         <methodCall>
             <methodName>v1.ldap.users.list</methodName>
             <params>
                 <param>
-                    <value><string>{auth_token}</string></value>
+                    <value><string>{self.auth_token}</string></value>
                 </param>
                 <param>
                     <value><int>{ldap_server_id}</int></value>
@@ -320,43 +333,44 @@ class Client:
         '''
         data = inspect.cleandoc(data)
         response = requests.post(self.url, data, headers)
-        print(response.content)
         xml_tree = ElementTree.fromstring(response.content)
-        xml_user_list = xml_tree.findall('./params/param/value/array/data/value')
+        xml_user_list = xml_tree.findall(
+            './params/param/value/array/data/value')
         users = []
         for xml_user in xml_user_list:
             members = {
                 'guid': xml_user.findtext('./struct/member[name="guid"]/./value/string'),
                 'name': xml_user.findtext('./struct/member[name="name"]/./value/string'),
-                'ldap_dn': xml_user.findtext('./struct/member[name="ldap_dn"]/./value/string') 
+                'ldap_dn': xml_user.findtext('./struct/member[name="ldap_dn"]/./value/string')
             }
-            xml_login_names = xml_user.findall('./struct/member[name="login"]/./value/array/data/value')
+            xml_login_names = xml_user.findall(
+                './struct/member[name="login"]/./value/array/data/value')
             login_names = []
             for xml_login_name in xml_login_names:
                 login_name = xml_login_name.findtext('./string')
                 login_names.append(login_name)
-            
+
             members['login'] = login_names
             users.append(members)
 
         return users
 
     # _action
-    def add_rule(self, _action, _name, _description, _users, _dst_ip_list_id_list, _src_ip_list_id_list, _url_list_id_list):
-        auth_token = self.auth()
-        user_list = [["user", x] for x in _users]
-        dst_ips_list_id_list = [["list_id", x] for x in _dst_ip_list_id_list]
-        src_ips_list_id_list = [["list_id", x] for x in _src_ip_list_id_list]
+    def add_rule(self, _action, _name, _description, _users, _dst_ip_list_id_list, _src_ip_list_id_list, _url_list_id_list, authenticate=False):
+        if authenticate:
+            self.auth()
         zones = self.get_zones()
-        src_zone_id = next(filter(lambda x: x['name'] == 'Trusted', zones))['id']
-        dst_zone_id = next(filter(lambda x: x['name'] == 'Untrusted', zones))['id']
+        src_zone_id = next(
+            filter(lambda x: x['name'] == 'Trusted', zones))['id']
+        dst_zone_id = next(
+            filter(lambda x: x['name'] == 'Untrusted', zones))['id']
         data = f'''
         <?xml version="1.0"?>
         <methodCall>
             <methodName>v1.content.rule.add</methodName>
             <params>
                 <param>
-                    <value><string>{auth_token}</string></value>
+                    <value><string>{self.auth_token}</string></value>
                 </param>
                 <param>
                     <value>
@@ -378,7 +392,7 @@ class Client:
 								<value><string>{_name}</string></value>
 							</member>
 							<member>
-								<name>desciption</name>
+								<name>description</name>
 								<value><string>{_description}</string></value>
 							</member>
 							<member>
@@ -407,7 +421,7 @@ class Client:
 							</member>
                             <member>
                                 <name>users</name>
-                                <value>{misc.list_to_xml_array(user_list)}</value>
+                                <value>{misc.list_to_xml_array(_users)}</value>
                             </member>
                             <member>
                                 <name>morph_categories</name>
@@ -423,7 +437,7 @@ class Client:
 							</member>
                             <member>
                                 <name>dst_ips</name>
-                                <value>{misc.list_to_xml_array(dst_ips_list_id_list)}</value>
+                                <value>{misc.list_to_xml_array(_dst_ip_list_id_list)}</value>
                             </member>
 							<member>
 								<name>dst_ips_negate</name>
@@ -447,7 +461,7 @@ class Client:
 							</member>
 							<member>
 								<name>src_ips</name>
-								<value>{misc.list_to_xml_array([src_ips_list_id_list])}</value>
+								<value>{misc.list_to_xml_array(_src_ip_list_id_list)}</value>
 							</member>
 							<member>
 								<name>src_ips_negate</name>
@@ -462,27 +476,27 @@ class Client:
 								<value><boolean>0</boolean></value>
 							</member>
                             <member>
-                                <name>urls</urls>
+                                <name>urls</name>
                                 <value>{misc.list_to_xml_array(_url_list_id_list)}</value>
                             </member>
-                            <members>
+                            <member>
 								<name>urls_negate</name>
 								<value><boolean>0</boolean></value>
-                            </members>
+                            </member>
                             <member>
-                                <name>time_restrictions</urls>
+                                <name>time_restrictions</name>
                                 <value>{misc.list_to_xml_array([])}</value>
                             </member>
                             <member>
-                                <name>http_methods</urls>
+                                <name>http_methods</name>
                                 <value>{misc.list_to_xml_array([])}</value>
                             </member>
                             <member>
-                                <name>user_agents</urls>
+                                <name>user_agents</name>
                                 <value>{misc.list_to_xml_array([])}</value>
                             </member>
                             <member>
-                                <name>referers</urls>
+                                <name>referers</name>
                                 <value>{misc.list_to_xml_array([])}</value>
                             </member>
                         </struct>
@@ -491,20 +505,23 @@ class Client:
             </params>
         </methodCall>
         '''
+        print(data)
         data = inspect.cleandoc(data)
         response = requests.post(self.url, data, headers)
+        print(response.content)
         xml_tree = ElementTree.fromstring(response.content)
         return int(xml_tree.findtext('./params/param/value/int'))
 
-    def get_rules(self):
-        auth_token = self.auth()
+    def get_rules(self, authenticate=False):
+        if authenticate:
+            self.auth()
         data = f'''
         <?xml version="1.0"?>
         <methodCall>
             <methodName>v1.content.rules.list</methodName>
             <params>
                 <param>
-                    <value><string>{auth_token}</string></value>
+                    <value><string>{self.auth_token}</string></value>
                 </param>
                 <param>
                     <value><int>1</int></value>

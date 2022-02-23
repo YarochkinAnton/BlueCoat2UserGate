@@ -2,10 +2,14 @@ from struct import unpack
 import parsec as p
 import enum
 
+from pkg_resources import ExtractionError
+
+
 class ParserState(enum.Enum):
     Init = enum.auto()
     ProxyGroup = enum.auto()
     ConditionGroup = enum.auto()
+
 
 def generic_list_parser(_value_parser, _separator_parser):
     # Lists in BlueCoat enclosed in brackets
@@ -19,8 +23,10 @@ def generic_list_parser(_value_parser, _separator_parser):
 # Return list anyways
 def maybe_list_parser(_value_parser):
     separator = p.spaces() + p.string(',') + p.spaces()
-    unmapped_result = (generic_list_parser(_value_parser, separator) ^ _value_parser)
-    result = p.parsecmap(unmapped_result, lambda x: x if isinstance(x, list) else [x])
+    unmapped_result = (generic_list_parser(
+        _value_parser, separator) ^ _value_parser)
+    result = p.parsecmap(
+        unmapped_result, lambda x: x if isinstance(x, list) else [x])
     return result
 
 
@@ -59,7 +65,8 @@ def date_range_parser():
     result = p.regex(r'\d\d\d\d\d\d\d\d\.\.\d\d\d\d\d\d\d\d')
 
     #                   y y y y m m d d                                   y y y y m m d d
-    unmapped_result = p.regex(r'\d\d\d\d\d\d\d\d') + (p.string('..') >> p.regex(r'\d\d\d\d\d\d\d\d'))
+    unmapped_result = p.regex(r'\d\d\d\d\d\d\d\d') + \
+        (p.string('..') >> p.regex(r'\d\d\d\d\d\d\d\d'))
     result = p.parsecmap(unmapped_result, lambda x: (int(x[0]), int(x[1])))
     return result
 
@@ -75,10 +82,12 @@ def setting_parser():
     # setting_name1(yes)
     # setting_name2(no)
     # setting_name3(none)
-    name = p.regex(r'[\w_]+')
+    # setting.name4(no)
+    # limit_bandwith.server.inbound(BWM_CheckPoint)
+    name = p.regex(r'[\w_\.]+')
     value = p.string('yes') ^ p.string('none') ^ p.string(
-        'no') ^ p.regex(r'"[\w\d\-\.]+"')
-    return name + (p.string('(') >> value << p.string(')'))
+        'no') ^ p.regex(r'[\w\d_\-\.]+')
+    return name + p.parsecmap((p.string('(') >> value << p.string(')')), lambda x: [x])
 
 
 rule_type_regex = r'(ALLOW|DENY|FORCE_DENY)'
@@ -130,14 +139,13 @@ def category_name_parser():
     # "Technology/Internet"
     # "Search Engines/Portals"
     # "Mixed Content/Potentialy Adult"
-    category_name = p.regex(r'[\w\s]+/[\w\s]+')
-    result = quoted_parser(category_name)
+    result = p.regex(r'([\w\d_/]+|"[\w_\s/]+")')
     return result
 
 
 def category_parameter_parser():
     result = generic_parameter_parser(
-        p.regex(r'\w.category'), category_name_parser())
+        p.regex(r'(\w+.)?category'), category_name_parser())
     return result
 
 
@@ -166,7 +174,7 @@ def url_address_parameter_parser():
 
 
 def proxy_port_parameter_parser():
-    result = generic_parameter_parser(p.string('proxy.port'), port_parser())
+    result = generic_parameter_parser(p.regex(r'\w+.port'), port_parser())
     return result
 
 
@@ -225,4 +233,10 @@ def try_parser(_parser_list):
     result = _parser_list[0]
     for x in _parser_list[1:]:
         result = result ^ x
+    return result
+
+
+def url_extension_parameter_parser():
+    result = generic_parameter_parser(
+        p.string('url.extension'), p.string('CRL'))
     return result

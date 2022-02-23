@@ -5,6 +5,8 @@ import parsec as p
 import parsers
 import bluecoat
 import filters
+import anal
+import extract
 
 
 def parse_proxy_group_header(_line_number, line):
@@ -13,15 +15,9 @@ def parse_proxy_group_header(_line_number, line):
     return dict((('line_number', _line_number), *parse_result))
 
 
-
-
 def parse_rule(_line_number, _line):
     parsed_rule = p.parse(rule_parser(), _line, 0)
     return dict(parsed_rule)
-
-
-
-
 
 
 class LineType(enum.Enum):
@@ -79,18 +75,19 @@ def rule_parser():
         p.desc(parsers.condition_parser(), 'Condition parser failed'),
         p.desc(parsers.date_parameter_parser(), 'Date parser failed'),
         p.desc(parsers.user_parameter_parser(), 'User parser failed'),
-        p.desc(parsers.category_parameter_parser(), 'Category parser failed'),
+        parsers.category_parameter_parser(),
         parsers.client_address_parameter_parser(),
         parsers.client_host_parameter_parser(),
         parsers.url_domain_parameter_parser(),
         parsers.url_address_parameter_parser(),
         parsers.proxy_port_parameter_parser(),
         parsers.setting_parser(),
+        parsers.url_extension_parameter_parser(),
     ]
     parameters_parser = p.parsecmap(p.sepBy1(
-        parsers.try_parser(parameters), p.many1(p.spaces())), lambda x: ('parameters', x))
+        parsers.try_parser(parameters), p.spaces()), lambda x: ('parameters', x))
     result = p.spaces() >> (parsers.rule_type_parser() +
-                            (p.spaces() >> parameters_parser))
+                            (p.spaces() >> parameters_parser << p.regex('$')))
     return result
     '''
 parameter = condition_parser() ^ date_range_parser(
@@ -110,19 +107,26 @@ def clear_comments(line):
     pos = line.rfind(';')
     return line[:pos]
 
+
 def extract_comment(line):
-    pos = line.rfind(';')
+    pos = line.find(';')
+    result = ("",)
     if pos == -1:
-        return (line, "")
+        result = (line, "")
     else:
-        return (line[:pos], filter_newline(line[pos + 1:]))
+        result = (line[:pos], filter_newline(line[pos + 1:]))
+
+    result = (result[0].rstrip(), result[1])
+    return result
+
 
 def filter_newline(line):
     return line[:-1]
 
+
 if __name__ == '__main__':
     filename = sys.argv[1]
-    
+
     # server or user
     # For different aggregation naming logic
     rule_category = sys.argv[2]
@@ -134,39 +138,60 @@ if __name__ == '__main__':
     parser_state = parsers.ParserState.Init
 
     for (number, line) in enumerate(input_file.readlines(), start=1):
-        try:
-            (line, comment) = extract_comment(line)
-            type_of_line = line_type(line)
+        # try:
+        (line, comment) = extract_comment(line)
+        type_of_line = line_type(line)
 
-            if type_of_line == LineType.Comment:
-                continue
-            elif type_of_line == LineType.Empty:
-                continue
-            elif type_of_line == LineType.ProxyHeader:
-                parsed_header = parse_proxy_group_header(number, line)
-                fw_objects.append(bluecoat.ProxyGroup(
-                    number, parsed_header['name'], [], parsed_header.get('condition')))
-                parser_state = parsers.ParserState.ProxyGroup
-                continue
-            elif type_of_line == LineType.ConditionHeader:
-                parser_state = parsers.ParserState.Init
-                continue
-            elif type_of_line == LineType.IDGAF:
-                if parser_state == parsers.ParserState.ProxyGroup:
-                    parsed_rule = None
-                    parsed_rule = parse_rule(number, line)
-                    rule = bluecoat.Rule(number, parsed_rule['type'], parsed_rule['parameters'] if parsed_rule.get(
-                        'parameters') else [], comment, parsed_rule.get('condition'))
-                    # print(rule)
-                    fw_objects[-1].add_rule(number, rule)
-        except:
-            print("Stopped at", number)
-            exit(1)
+        if type_of_line == LineType.Comment:
+            continue
+        elif type_of_line == LineType.Empty:
+            continue
+        elif type_of_line == LineType.ProxyHeader:
+            parsed_header = parse_proxy_group_header(number, line)
+            fw_objects.append(bluecoat.ProxyGroup(
+                number, parsed_header['name'], [], parsed_header.get('condition')))
+            parser_state = parsers.ParserState.ProxyGroup
+            continue
+        elif type_of_line == LineType.ConditionHeader:
+            parser_state = parsers.ParserState.Init
+            continue
+        elif type_of_line == LineType.IDGAF:
+            if parser_state == parsers.ParserState.ProxyGroup:
+                parsed_rule = None
+                parsed_rule = parse_rule(number, line)
+                rule = bluecoat.Rule(number, parsed_rule['type'], parsed_rule['parameters'] if parsed_rule.get(
+                    'parameters') else [], comment, parsed_rule.get('condition'))
+                # print(rule)
+                fw_objects[-1].add_rule(number, rule)
+        # except Exception as e:
+        # print(e)
+        # print("Stopped at", number)
+        # exit(1)
 
-    
-    (fw_objects, filtered_out_lines) = filters.filter_rules(fw_objects, rule_category)
+    initial_count = sum([len(group.rules) for group in fw_objects])
+    attribute_set = anal.get_parameter_set(fw_objects)
 
+    (fw_objects, filtered_out_lines) = filters.filter_rules(
+        fw_objects, rule_category)
+
+    fw_objects = filters.filter_groups(fw_objects, rule_category)
+
+    count_after_filtering = sum(
+        [len(group.rules) for group in fw_objects])
     for fw_obj in fw_objects:
         print(fw_obj)
+        fw_obj.combine_similar()
+        print(fw_obj)
+
+    count_after_reduction = sum([len(group.rules) for group in fw_objects])
 
     print("Filtered out", filtered_out_lines)
+    print("Initial: ", initial_count)
+    print("After filtering: ", count_after_filtering)
+    print("After reduction: ", count_after_reduction)
+    print("Initial attribute set: ", attribute_set)
+    attribute_set = anal.get_parameter_set(fw_objects)
+    print("Filtered attribute set: ", attribute_set)
+    print("Users: ", set(extract.collect_parameter_all(fw_objects, 'user')))
+
+    extract.extractors[rule_category](fw_objects)
