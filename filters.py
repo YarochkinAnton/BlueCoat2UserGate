@@ -7,7 +7,7 @@ from datetime import datetime
 
 
 def filter_rules(_fw_objects, _type):
-    filtered_out = []
+    filtered_out = set()
     if filters := rule_filter_map[_type]:
         for object in _fw_objects:
             filtered_rules = []
@@ -16,7 +16,7 @@ def filter_rules(_fw_objects, _type):
                 if all([f(rule) for f in filters]):
                     filtered_rules.append(rule)
                 else:
-                    filtered_out.append(rule.line_number)
+                    filtered_out |= rule.line_number
             object.rules = filtered_rules
         return (_fw_objects, filtered_out)
     else:
@@ -40,8 +40,12 @@ def condition_filter(_rule):
 # Return True if rule is not expired
 
 
-def date_filter(_rule):
+def expired_filter(_rule):
     return not _rule.is_expired()
+
+
+def date_filter(_rule):
+    return _rule.get_parameter('date') == None
 
 
 def category_filter(_rule):
@@ -64,6 +68,10 @@ def proxy_port_filter(_rule):
     return _rule.get_parameter('proxy.port') == None
 
 
+def client_protocol_filter(_rule):
+    return _rule.get_parameter('client.protocol') == None
+
+
 common_rule_filters = [
     condition_filter,
     date_filter,
@@ -77,7 +85,7 @@ server_rule_filters = [
 ] + common_rule_filters
 
 user_rule_filters = [
-
+    client_protocol_filter,
 ] + common_rule_filters
 
 rule_filter_map = {

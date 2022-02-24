@@ -86,7 +86,7 @@ class ProxyGroup:
 
                     if (a.is_same_source(b)
                             or (not have_uncommon_parameters and all_destination_parameters_are_equal)):
-                        new_rule = a.combine(b)
+                        new_rule = new_rule + (a + b)
                         indexes_to_remove.append(n + 1)
 
             ouput_rules.append(new_rule)
@@ -147,7 +147,10 @@ class Rule:
     def __str__(self):
         condition_string = f'{"condition = " + self.condition if self.condition else ""}'
         comment_string = f'{" // " + self.comment if self.comment else ""}'
-        return f'{self.line_number} Proxy rule {condition_string}{self.parameters}{comment_string}'
+        return f'{sorted(self.line_number)} Proxy rule {condition_string}{self.parameters}{comment_string}'
+
+    def __add__(self, other):
+        return self.combine(other)
 
     def get_parameter(self, _parameter_name):
         return self.parameters.get(_parameter_name)
@@ -164,11 +167,7 @@ class Rule:
             False
 
     def combine(self, other: 'Rule'):
-        line_number = None
-        try:
-            line_number = [*self.line_number, other.line_number]
-        except:
-            line_number = [self.line_number, other.line_number]
+        line_number = self.line_number | other.line_number
         type = self.type
         comment = f'{self.comment} {other.comment}'
         condition = self.condition
@@ -193,5 +192,9 @@ class Rule:
         if a_source := self.get_parameter('client.address'):
             if b_source := other.get_parameter('client.address'):
                 return set(a_source) == set(b_source)
+        else:
+            if a_source := self.get_parameter('user'):
+                if b_source := other.get_parameter('user'):
+                    return set(a_source) == set(b_source)
 
         return False

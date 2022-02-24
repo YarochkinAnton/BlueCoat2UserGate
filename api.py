@@ -74,7 +74,6 @@ class Client:
     def get_named_lists(self, _type, authenticate=False):
         if authenticate:
             self.auth()
-        auth_token = self.auth()
         data = f'''
         <?xml version="1.0"?>
         <methodCall>
@@ -127,7 +126,6 @@ class Client:
     def get_list_info(self, _id, authenticate=False):
         if authenticate:
             self.auth()
-        auth_token = self.auth()
         data = f'''
         <?xml version="1.0"?>
         <methodCall>
@@ -505,10 +503,8 @@ class Client:
             </params>
         </methodCall>
         '''
-        print(data)
         data = inspect.cleandoc(data)
         response = requests.post(self.url, data, headers)
-        print(response.content)
         xml_tree = ElementTree.fromstring(response.content)
         return int(xml_tree.findtext('./params/param/value/int'))
 
@@ -527,10 +523,8 @@ class Client:
                     <value><int>1</int></value>
                 </param>
                 <param>
-                    <value><string>1000</string></value>
+                    <value><string>10000</string></value>
                 </param>
-                '''\
-                '''
                 <param>
                     <value>
                         <struct>
@@ -543,4 +537,15 @@ class Client:
         data = inspect.cleandoc(data)
         response = requests.post(self.url, data, headers)
         xml_tree = ElementTree.fromstring(response.content)
-        return response.content
+        xml_items = xml_tree.findall(
+            '.params/param/value/struct/member[name="items"]/./value/array/data/value')
+        result = []
+        for xml_item in xml_items:
+            members = {}
+            for xml_member in xml_item.findall('.struct/member'):
+                name = xml_member.findtext('./name')
+                value = xml_member.findtext('./value/*')
+                members[name] = value
+            result.append(members)
+
+        return result

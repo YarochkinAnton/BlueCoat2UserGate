@@ -1,9 +1,8 @@
 import bluecoat
 import usergate
-from typing import Any, List, Union
+from typing import Any, List, Union, Tuple
 import os
 import api
-import threading
 from multiprocessing.pool import ThreadPool
 
 
@@ -17,8 +16,57 @@ def collect_parameter_all(_fw_objects, parameter_name):
     return parameter_values
 
 
+def fetch_user_id(client: api.Client, server_name, username):
+    found_user_ids = client.get_user(server_name, username)
+    print(found_user_ids)
+    assert(len(found_user_ids) > 0)
+    return (username, found_user_ids[0]['guid'])
+
+
+def populate_users(client: api.Client, pool: ThreadPool, server_name, user_list):
+    users = dict(pool.map(lambda u: fetch_user_id(
+        client, server_name, u), user_list))
+    return users
+
+
+def fetch_url_id(client: api.Client, existring_url_lists, named_url_list: Tuple[str, usergate.URLList]):
+    (name, url_list) = named_url_list
+    if id := existring_url_lists.get(name):
+        return (name, id)
+    else:
+        return (name, url_list.commit(client))
+
+
+def populate_url_lists(client: api.Client, pool: ThreadPool, url_lists):
+    existing_urls = dict(map(lambda x: (
+        x['name'], x['id']), client.get_named_lists('url')))
+    return pool.map_async(lambda url_list: fetch_url_id(client, existing_urls, url_list), url_lists.items())
+
+
+def fetch_ip_list_id(client: api.Client, existing_ip_lists, named_ip_list: Tuple[str, usergate.URLList]):
+    (name, ip_list) = named_ip_list
+    if id := existing_ip_lists.get(name):
+        return (name, id)
+    else:
+        return (name, ip_list.commit(client))
+
+
+def populate_ip_lists(client: api.Client, pool: ThreadPool, ip_lists: dict):
+    assert(isinstance(ip_lists, dict))
+    new_ip_lists = {
+        'src': {},
+        'dst': {},
+    }
+    existing_ip_lists = dict(
+        map(lambda x: (x['name'], x['id']), client.get_named_lists('network')))
+    for direction, named_ip_lists in ip_lists.items():
+        new_ip_lists[direction] = pool.map_async(lambda ip_list: fetch_ip_list_id(
+            client, existing_ip_lists, ip_list), named_ip_lists.items())
+    return new_ip_lists
+
+
 def server_extractor(_fw_objects: List[bluecoat.ProxyGroup]) -> List[Union[usergate.IPList, usergate.URLList, usergate.Rule]]:
-    pool = ThreadPool(processes=3)
+    pool = ThreadPool(processes=8)
     url = os.environ.get('RPC_URL')
     username = os.environ.get('FW_USERNAME')
     password = os.environ.get('FW_PASSWORD')
@@ -32,7 +80,6 @@ def server_extractor(_fw_objects: List[bluecoat.ProxyGroup]) -> List[Union[userg
     def handle_users(client: api.Client, username_list):
         username_to_guid = {}
         for username in username_list:
-            fetched_user = client.get_user(ldap_server_name, username)
             user_guid = next(filter(lambda u: username in u['name'], client.get_user(
                 ldap_server_name, username)))['guid']
 
@@ -42,7 +89,7 @@ def server_extractor(_fw_objects: List[bluecoat.ProxyGroup]) -> List[Union[userg
         return username_to_guid
 
     user_list_thread = pool.apply_async(
-        handle_users, (client, users))
+        populate_users, (client, pool, ldap_server_name, users))
 
     url_lists = {}
     ip_lists = {
@@ -64,12 +111,6 @@ def server_extractor(_fw_objects: List[bluecoat.ProxyGroup]) -> List[Union[userg
                 ip_list_name = f'DST {name_prefix} {str(rule.line_number)}'
                 ip_lists['dst'][ip_list_name] = usergate.IPList(
                     ip_list_name, '', destination_addresses)
-
-    # for (name, l) in ip_lists.items():
-    #     print(name, l)
-
-    # for (name, l) in url_lists.items():
-    #     print(name, l)
 
     def handle_ip_lists(client, ip_lists):
         existing_ip_lists_names = dict(
@@ -144,17 +185,113 @@ def server_extractor(_fw_objects: List[bluecoat.ProxyGroup]) -> List[Union[userg
                 action_map[rule.type], f'{name_prefix} {rule.line_number}', rule.comment, user_ids, dst_ip_list_id, src_list_id, dst_url_list_id)
             usergate_rules.append(usergate_rule)
 
+    existing_rules = list(map(lambda r: r['name'], client.get_rules()))
+
+    usergate_rules = list(
+        filter(lambda r: r.name not in existing_rules, usergate_rules))
+
     client.auth()
-    for usergate_rule in usergate_rules:
-        uid = usergate_rule.commit(client)
-        print(uid)
+    uids = pool.map(lambda r: r.commit(client), usergate_rules)
+    print(uids)
 
 
 def user_extractor(_fw_objects):
-    x = 42
+    pool = ThreadPool(processes=8)
+    url = os.environ.get('RPC_URL')
+    username = os.environ.get('FW_USERNAME')
+    password = os.environ.get('FW_PASSWORD')
+    ldap_server_name = os.environ.get('FW_LDAP_SERVER_NAME')
+
+    client = api.Client(url, username, password)
+    client.auth()
+
+    users = collect_parameter_all(_fw_objects, 'user')
+    print(users)
+
+    users = populate_users(client, pool, ldap_server_name, users)
+    print(users)
+
+    url_lists = {}
+    ip_lists = {
+        'src': {},
+        'dst': {}
+    }
+    for object in _fw_objects:
+        name_prefix = object.name
+        for rule in object.rules:
+            if source_addresses := rule.get_parameter('client.address'):
+                ip_list_name = f'SRC {name_prefix} {str(rule.line_number)}'
+                ip_lists['src'][ip_list_name] = usergate.IPList(
+                    ip_list_name, '', source_addresses)
+            if source_hosts := rule.get_parameter('client.host'):
+                url_list_name = f'HOST {name_prefix} {str(rule.line_number)}'
+                url_lists[url_list_name] = usergate.URLList(
+                    url_list_name, '', source_hosts)
+            if url_domains := rule.get_parameter('url.domain'):
+                url_list_name = f'{name_prefix} {str(rule.line_number)}'
+                url_lists[url_list_name] = usergate.URLList(
+                    url_list_name, '', url_domains)
+            if destination_addresses := rule.get_parameter('url.address'):
+                ip_list_name = f'DST {name_prefix} {str(rule.line_number)}'
+                ip_lists['dst'][ip_list_name] = usergate.IPList(
+                    ip_list_name, '', destination_addresses)
+
+    url_lists = populate_url_lists(client, pool, url_lists)
+
+    for (n, l) in dict(url_lists.get()).items():
+        print(n, l)
+
+    ip_lists = populate_ip_lists(client, pool, ip_lists)
+
+    ip_lists = dict(
+        list(
+            map(lambda name_lists: (name_lists[0], dict(
+                name_lists[1].get())), ip_lists.items())
+        )
+    )
+
+    print(ip_lists)
+
+    usergate_rules = []
+
+    for object in _fw_objects:
+        name_prefix = object.name
+        for rule in object.rules:
+            src_list_id = [ip_lists['src'].get(
+                f'SRC {name_prefix} {rule.line_number}', [])]
+            user_ids = [users[username]
+                        for username in rule.parameters.get('user', [])]
+            dst_ip_list_id = []
+            if rule.parameters.get('url.address', []):
+                dst_ip_list_id = [ip_lists['dst']
+                                  [f'DST {name_prefix} {rule.line_number}']]
+            dst_url_list_id = []
+            if rule.parameters.get('url.domain', []):
+                dst_url_list_id = [
+                    url_lists[f'{name_prefix} {rule.line_number}']]
+
+            action_map = {
+                'ALLOW': 'accept',
+                'DENY': 'drop',
+            }
+
+            usergate_rule = usergate.Rule(
+                action_map[rule.type], f'{name_prefix} {rule.line_number}', rule.comment, user_ids, dst_ip_list_id, src_list_id, dst_url_list_id)
+            usergate_rules.append(usergate_rule)
+
+    existing_rules = list(map(lambda r: r['name'], client.get_rules()))
+
+    usergate_rules = list(
+        filter(lambda r: r.name not in existing_rules, usergate_rules))
+
+    client.auth()
+    uids = pool.map(lambda r: r.commit(client), usergate_rules)
+    print(uids)
 
 
 extractors = {
     'server': server_extractor,
     'user': user_extractor,
+
+
 }

@@ -139,7 +139,7 @@ def category_name_parser():
     # "Technology/Internet"
     # "Search Engines/Portals"
     # "Mixed Content/Potentialy Adult"
-    result = p.regex(r'([\w\d_/]+|"[\w_\s/]+")')
+    result = p.regex(r'([\w\d_/]+|"[\w_\s/,]+")')
     return result
 
 
@@ -239,4 +239,11 @@ def try_parser(_parser_list):
 def url_extension_parameter_parser():
     result = generic_parameter_parser(
         p.string('url.extension'), p.string('CRL'))
+    return result
+
+
+def client_protocol_parser():
+    result = generic_parameter_parser(
+        p.string('client.protocol'), p.regex('(ftp)'))
+
     return result

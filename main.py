@@ -83,6 +83,7 @@ def rule_parser():
         parsers.proxy_port_parameter_parser(),
         parsers.setting_parser(),
         parsers.url_extension_parameter_parser(),
+        parsers.client_protocol_parser(),
     ]
     parameters_parser = p.parsecmap(p.sepBy1(
         parsers.try_parser(parameters), p.spaces()), lambda x: ('parameters', x))
@@ -138,35 +139,35 @@ if __name__ == '__main__':
     parser_state = parsers.ParserState.Init
 
     for (number, line) in enumerate(input_file.readlines(), start=1):
-        # try:
-        (line, comment) = extract_comment(line)
-        type_of_line = line_type(line)
+        try:
+            (line, comment) = extract_comment(line)
+            type_of_line = line_type(line)
 
-        if type_of_line == LineType.Comment:
-            continue
-        elif type_of_line == LineType.Empty:
-            continue
-        elif type_of_line == LineType.ProxyHeader:
-            parsed_header = parse_proxy_group_header(number, line)
-            fw_objects.append(bluecoat.ProxyGroup(
-                number, parsed_header['name'], [], parsed_header.get('condition')))
-            parser_state = parsers.ParserState.ProxyGroup
-            continue
-        elif type_of_line == LineType.ConditionHeader:
-            parser_state = parsers.ParserState.Init
-            continue
-        elif type_of_line == LineType.IDGAF:
-            if parser_state == parsers.ParserState.ProxyGroup:
-                parsed_rule = None
-                parsed_rule = parse_rule(number, line)
-                rule = bluecoat.Rule(number, parsed_rule['type'], parsed_rule['parameters'] if parsed_rule.get(
-                    'parameters') else [], comment, parsed_rule.get('condition'))
-                # print(rule)
-                fw_objects[-1].add_rule(number, rule)
-        # except Exception as e:
-        # print(e)
-        # print("Stopped at", number)
-        # exit(1)
+            if type_of_line == LineType.Comment:
+                continue
+            elif type_of_line == LineType.Empty:
+                continue
+            elif type_of_line == LineType.ProxyHeader:
+                parsed_header = parse_proxy_group_header(number, line)
+                fw_objects.append(bluecoat.ProxyGroup(
+                    number, parsed_header['name'], [], parsed_header.get('condition')))
+                parser_state = parsers.ParserState.ProxyGroup
+                continue
+            elif type_of_line == LineType.ConditionHeader:
+                parser_state = parsers.ParserState.Init
+                continue
+            elif type_of_line == LineType.IDGAF:
+                if parser_state == parsers.ParserState.ProxyGroup:
+                    parsed_rule = None
+                    parsed_rule = parse_rule(number, line)
+                    rule = bluecoat.Rule({number}, parsed_rule['type'], parsed_rule['parameters'] if parsed_rule.get(
+                        'parameters') else [], comment, parsed_rule.get('condition'))
+                    # print(rule)
+                    fw_objects[-1].add_rule(number, rule)
+        except Exception as e:
+            print(e)
+            print("Stopped at", number)
+            exit(1)
 
     initial_count = sum([len(group.rules) for group in fw_objects])
     attribute_set = anal.get_parameter_set(fw_objects)
@@ -193,5 +194,7 @@ if __name__ == '__main__':
     attribute_set = anal.get_parameter_set(fw_objects)
     print("Filtered attribute set: ", attribute_set)
     print("Users: ", set(extract.collect_parameter_all(fw_objects, 'user')))
+
+    exit(1)
 
     extract.extractors[rule_category](fw_objects)

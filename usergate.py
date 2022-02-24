@@ -21,6 +21,7 @@ class IPList:
             client.add_list_item(self.id, item)
 
         print(f'Commited {self.name}')
+        return id
 
 
 class URLList:
@@ -43,6 +44,7 @@ class URLList:
             client.add_list_item(self.id, item)
 
         print(f'Commited {self.name}')
+        return id
 
 
 class Rule:
@@ -169,5 +171,5 @@ position_layer	String	readonly rule position, possible values are: pre, post, lo
                            for src_ip_list_id in self.src_ip_list_id_list]
         dst_url_list_ids = self.url_list_ids
 
-        client.add_rule(self.action, self.name, self.description,
-                        users, dst_ip_list_ids, src_ip_list_ids, dst_url_list_ids)
+        return client.add_rule(self.action, self.name, self.description,
+                               users, dst_ip_list_ids, src_ip_list_ids, dst_url_list_ids)

@@ -68,8 +68,18 @@ def test_ip_list():
 
 def test_get_list_info():
     client = api.Client(url, username, password)
-    info = client.get_named_lists("network")
+    info = client.get_named_lists("timerestrictiongroup", authenticate=True)
     print(info)
+    # time_list = next(filter(lambda x: x['name'] == 'TestTime', info))
+    list_info = client.get_list_info(1069)
+    # print(time_list)
+    print(list_info)
+
+
+def test_list_rules():
+    client = api.Client(url, username, password)
+    rules = client.get_rules(authenticate=True)
+    print(rules)
 
 
 if __name__ == '__main__':
@@ -77,6 +87,8 @@ if __name__ == '__main__':
     username = os.environ['FW_USERNAME']
     password = os.environ['FW_PASSWORD']
     # test_get_list_info()
+    test_list_rules()
+
     # test_ip_list()
     # ldap_server_list_test()
-    test_fetching_rules()
+    # test_fetching_rules()
