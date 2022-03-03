@@ -44,7 +44,7 @@ class ProxyGroup:
     def __init__(self, _line_number, _name, _rules, _condition=None):
         self.line_number = _line_number
         self.name = _name
-        self.rules = _rules
+        self.rules: List[Rule] = _rules
         self.condition = _condition
 
     def __str__(self):

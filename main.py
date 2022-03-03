@@ -53,21 +53,21 @@ def parse_rule_group_name(line):
     return line[name_begin_pos + 1:name_end_pos]
 
 
-def word_parser():
-    # Can have brackets, upward slashes and spaces if enclosed inside quotes
-    return p.regex(r'([\w\/\(\)\\\-]+|"[\w\/\(\)\s\\\-]+")')
+# def word_parser():
+#     # Can have brackets, upward slashes and spaces if enclosed inside quotes
+#     return p.regex(r'([\w\/\(\)\\\-]+|"[\w\/\(\)\s\\\-]+")')
 
 
-def regex_parser():
-    return p.regex(r'[\w\.]+\.regex') + (p.string('=') >> p.regex(r'"[\w\d\.\$\\\+]+"'))
+# def regex_parser():
+#     return p.regex(r'[\w\.]+\.regex') + (p.string('=') >> p.regex(r'"[\w\d\.\$\\\+]+"'))
 
 
-def key_name_parser():
-    return p.regex(r'[\w\.\-_]+')
+# def key_name_parser():
+#     return p.regex(r'[\w\.\-_]+')
 
 
-def value_parser():
-    return p.regex(r'([\w\.\-\\/\(\)]+|"[\w\.\-\\/\s\(\)]+")')
+# def value_parser():
+#     return p.regex(r'([\w\.\-\\/\(\)]+|"[\w\.\-\\/\s\(\)]+")')
 
 
 def rule_parser():
@@ -90,13 +90,6 @@ def rule_parser():
     result = p.spaces() >> (parsers.rule_type_parser() +
                             (p.spaces() >> parameters_parser << p.regex('$')))
     return result
-    '''
-parameter = condition_parser() ^ date_range_parser(
-) ^ user_parser() ^ key_value_parser() ^ setting_parser()
-parameters = p.parsecmap(
-    p.sepBy1(parameter, p.spaces()), lambda x: ('parameters', x))
-return p.parsecmap(p.spaces() >> (rule_type_parser() + (p.spaces() >> parameters) ^ rule_type_parser()), lambda x: (*x[0], *x[1:]))
-    '''
 
 
 def parse_condition_group_name(line):
@@ -197,4 +190,4 @@ if __name__ == '__main__':
 
     exit(1)
 
-    extract.extractors[rule_category](fw_objects)
+    extract.extractor_mc(fw_objects, rule_category)

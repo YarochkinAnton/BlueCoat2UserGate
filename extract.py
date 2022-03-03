@@ -1,9 +1,10 @@
 import bluecoat
 import usergate
-from typing import Any, List, Union, Tuple
+from typing import Any, List, Union, Tuple, Dict
 import os
 import api
 from multiprocessing.pool import ThreadPool
+import MC_lib
 
 
 def collect_parameter_all(_fw_objects, parameter_name):
@@ -63,6 +64,148 @@ def populate_ip_lists(client: api.Client, pool: ThreadPool, ip_lists: dict):
         new_ip_lists[direction] = pool.map_async(lambda ip_list: fetch_ip_list_id(
             client, existing_ip_lists, ip_list), named_ip_lists.items())
     return new_ip_lists
+
+
+def extractor_mc(_fw_objects: List[bluecoat.ProxyGroup], rule_category: str) -> List[Union[usergate.IPList, usergate.URLList, usergate.Rule]]:
+    '''
+    Paramteres
+    ----------
+    rule_category: str
+        'server' or 'user'
+    '''
+    assert(rule_category != '')
+    # Weather updates for MC variant
+    # Firstly we should go through list of url lists
+    #   add list name of lists
+    #   go through each url inside inner list
+    #       add that list to named list
+    server_ip = os.environ.get('FW_ADDRESS')
+    username = os.environ.get('FW_USERNAME')
+    password = os.environ.get('FW_PASSWORD')
+    ldap_server_name = os.environ.get('FW_LDAP_SERVER_NAME')
+    prefix = os.environ.get('FW_PREFIX')
+    template_name = f'template_{rule_category}'
+
+    server = MC_lib.mc(server_ip=server_ip, login=username,
+                       prefix=prefix, password=password)
+    server.start()
+    server.mctemplate_add(name=template_name,
+                          description='Template for server rules exported and comined from BlueCoat')
+
+    (url_lists, ip_lists) = gather_lists(_fw_objects)
+
+    for (url_list_name, url_list) in url_lists.items():
+        server.template_list_url_add(
+            template_name, url_list_name, description='')
+        for url in url_list:
+            server.template_url_in_list_add(url_list_name, url)
+
+        for (ip_list_name, ip_list) in ip_lists.items():
+            server.template_group_ip_address_add(
+                template_name, ip_list_name, description='', threat_level='very_low')
+            for ip in ip_list:
+                server.template_ip_address_in_group_add(ip_list_name, ip)
+
+    for object in _fw_objects:
+        name_prefix = object.name
+
+        for rule in object.rules:
+            local_user = None
+            if users := rule.parameters.get('user', None):
+                local_user = ", ".join(users)
+
+            src_ips = None
+            if rule.parameters.get('client.address', None):
+                src_ips = f'SRC {name_prefix} {str(rule.line_number)}'
+
+            dst_ips = None
+            if rule.parameters.get('url.address', None):
+                dst_ips = f'DST {name_prefix} {str(rule.line_number)}'
+
+            urls = None
+            if rule.parameters.get('url.domain', None):
+                urls = f'{name_prefix} {str(rule.line_number)}'
+
+            server.template_content_filtering_rule_add(
+                template=template_name,
+                name=f'{name_prefix} {rule.line_number}',
+                public_name='',
+                enabled=True,
+                action=action_map[rule.type],
+                description=f'{rule.comment}',
+                position=1,
+                enable_custom_redirect=False,
+                blockpage_template=-1,
+                special_user=None,
+                local_user=local_user,
+                local_group=None,
+                ldap_server=ldap_server_name,
+                url_categories=None,
+                group_categories=None,
+                referer_categories=None,
+                src_ips=src_ips,
+                dst_ips=dst_ips,
+                morph_lists=None,
+                urls=urls,
+                referers=None,
+                src_zones='Trusted',
+                dst_zones='Untrusted',
+                time_restrictions=None,
+                content_types=None,
+                http_methods=None,
+                custom_redirect=None,
+                enable_kav_check=False,
+                enable_md5_check=False,
+                rule_log=True,
+                src_zones_negate=False,
+                dst_zones_negate=False,
+                user_agents=None,
+                src_ips_negate=False,
+                dst_ips_negate=False,
+                url_categories_negate=False,
+                urls_negate=False,
+                referer_negate=False,
+                content_types_negate=False,
+                user_agents_negate=False,
+                scenario_rule_name=None,
+                position_layer='pre',
+                active=True,
+                rownumber=1,
+                devices=None,
+                devices_invert=False,
+                users_negate=False
+            )
+
+            action_map = {
+                'ALLOW': 'accept',
+                'DENY': 'drop',
+            }
+
+
+def gather_lists(_fw_objects: List[bluecoat.ProxyGroup]) \
+        -> Tuple[Dict[str, List[usergate.URLList]], Dict[str, List[usergate.IPList]]]:
+
+    url_lists: Dict[str, List[usergate.URLList]] = {}
+    ip_lists: Dict[str, List[usergate.IPList]] = {}
+
+    for object in _fw_objects:
+
+        name_prefix = object.name
+
+        for rule in object.rules:
+            if source_addresses := rule.get_parameter('client.address'):
+                ip_list_name = f'SRC {name_prefix} {str(rule.line_number)}'
+                ip_lists[ip_list_name] = source_addresses
+
+            if url_domains := rule.get_parameter('url.domain'):
+                url_list_name = f'{name_prefix} {str(rule.line_number)}'
+                url_lists[url_list_name] = url_domains
+
+            if destination_addresses := rule.get_parameter('url.address'):
+                ip_list_name = f'DST {name_prefix} {str(rule.line_number)}'
+                ip_lists[ip_list_name] = destination_addresses
+
+    return (url_lists, ip_lists)
 
 
 def server_extractor(_fw_objects: List[bluecoat.ProxyGroup]) -> List[Union[usergate.IPList, usergate.URLList, usergate.Rule]]:
@@ -292,6 +435,4 @@ def user_extractor(_fw_objects):
 extractors = {
     'server': server_extractor,
     'user': user_extractor,
-
-
 }

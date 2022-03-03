@@ -2,8 +2,6 @@ from struct import unpack
 import parsec as p
 import enum
 
-from pkg_resources import ExtractionError
-
 
 class ParserState(enum.Enum):
     Init = enum.auto()
